@@ -1,0 +1,67 @@
+name: Production cleanup
+
+on:
+  push:
+    paths:
+      - '.github/workflows/production-cleanup.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Update production HTML files
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          changed = []
+          for path in sorted(Path('.').glob('*.html')):
+              text = path.read_text(encoding='utf-8')
+              original = text
+              text = text.replace('<meta name="robots" content="noindex,nofollow">', '<meta name="robots" content="index,follow">')
+              text = text.replace(' · versão de desenvolvimento', '')
+              text = text.replace('<span>Versão de desenvolvimento • ambiente de testes</span>', '')
+              text = text.replace('Versão de desenvolvimento • ambiente de testes', '')
+              text = text.replace('versão de desenvolvimento • ambiente de testes', '')
+              if text != original:
+                  path.write_text(text, encoding='utf-8')
+                  changed.append(str(path))
+
+          print('Arquivos alterados:')
+          for name in changed:
+              print('-', name)
+          PY
+
+          if grep -RniE 'noindex|nofollow|versão de desenvolvimento|Versão de desenvolvimento|ambiente de testes' --include='*.html' .; then
+            echo 'Ainda existem marcadores de teste/bloqueio em arquivos HTML.'
+            exit 1
+          fi
+
+          for f in *.html; do
+            grep -q '<meta name="robots" content="index,follow">' "$f" || { echo "robots index,follow ausente em $f"; exit 1; }
+          done
+
+          git diff --check
+          git status --short
+
+      - name: Commit production cleanup
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo 'Nenhuma alteração necessária.'
+            exit 0
+          fi
+          git config user.name 'Solarca Production Cleanup'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add '*.html'
+          git commit -m 'Prepare all pages for production indexing'
+          git push
